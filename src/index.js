@@ -435,7 +435,7 @@ function splitDateRangeIfLarge(since, until) {
   const totalDays = Math.round((untilDate - sinceDate) / 86400000) + 1;
   if (totalDays <= 20) return [{ since, until }];
 
-  const CHUNK_DAYS = 7;
+  const CHUNK_DAYS = 4;
   const fmt = (d) => {
     const pad = (n) => String(n).padStart(2, "0");
     return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
@@ -782,7 +782,7 @@ export default {
         return jsonResponse(
           {
             ok: true,
-            version: "2026-07-30-weekly-chunk-split",
+            version: "2026-07-30-4day-chunk-split",
             message:
               "代理 Worker 運作中。呼叫範例: /api/orders?since=...&until=... 或 /api/meta/insights?since=...&until=...",
           },
