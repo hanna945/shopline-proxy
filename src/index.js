@@ -403,6 +403,8 @@ function metaApiErrorHint(e) {
 }
 
 // 抓「單一段」時間範圍的 per-ad insights 原始列(不分組、不查廣告細節),供下面依需要切段呼叫。
+// context帶上實際的since~until,萬一失敗,錯誤訊息能直接看出是切段後的哪一小段(哪一週)出問題,
+// 不用再靠猜的——之前的版本錯誤訊息都寫「讀取成效資料」,看不出是第幾段失敗。
 async function fetchInsightsRowsForRange(state, token, accountId, since, until) {
   const encToken = encodeURIComponent(token);
   const timeRange = encodeURIComponent(JSON.stringify({ since, until }));
@@ -412,7 +414,7 @@ async function fetchInsightsRowsForRange(state, token, accountId, since, until) 
   let rows = [];
   let page = 0;
   while (insightsUrl && page < 20) {
-    const json = await fetchGraphApi(state, insightsUrl, "讀取成效資料");
+    const json = await fetchGraphApi(state, insightsUrl, `讀取成效資料(${since}~${until},第${page + 1}頁)`);
     rows = rows.concat(json.data || []);
     insightsUrl = json.paging && json.paging.next ? json.paging.next : null;
     page++;
@@ -420,9 +422,10 @@ async function fetchInsightsRowsForRange(state, token, accountId, since, until) 
   return rows;
 }
 
-// 把 since~until 這段日期範圍,依「相隔天數」切成大約對半的兩段(各自不超過~15天),
-// 只有在範圍夠大(超過 20 天,代表是月報表這種大範圍查詢)時才切;短範圍(週報表)維持單段查詢。
-// 這樣單次打給 Meta 的 insights 查詢,涵蓋的天數變小,比較不容易在 Meta 那邊逼近逾時複雜度上限。
+// 把 since~until 這段日期範圍,切成一段一段大約7天(一週)的小區間——月報表(30天)大概會切成4~5段。
+// 只有在範圍夠大(超過 20 天,代表是月報表這種大範圍查詢)時才切;短範圍(週報表本身)維持單段查詢。
+// 之前的版本只切成對半(各約15天),對H&J一頁業績這種高流量帳號還是不夠小,同樣的錯誤(1/99)還是
+// 一樣發生;改成用「週報表證實可靠的天數」當作每一段的大小,理論上更不容易在 Meta 那邊逼近逾時。
 function splitDateRangeIfLarge(since, until) {
   const sinceParts = parseDateParts(since);
   const untilParts = parseDateParts(until);
@@ -432,17 +435,19 @@ function splitDateRangeIfLarge(since, until) {
   const totalDays = Math.round((untilDate - sinceDate) / 86400000) + 1;
   if (totalDays <= 20) return [{ since, until }];
 
-  const midOffset = Math.floor(totalDays / 2) - 1;
-  const midDate = new Date(sinceDate.getTime() + midOffset * 86400000);
-  const midNextDate = new Date(midDate.getTime() + 86400000);
+  const CHUNK_DAYS = 7;
   const fmt = (d) => {
     const pad = (n) => String(n).padStart(2, "0");
     return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
   };
-  return [
-    { since, until: fmt(midDate) },
-    { since: fmt(midNextDate), until },
-  ];
+  const chunks = [];
+  let cursor = sinceDate;
+  while (cursor <= untilDate) {
+    const chunkEnd = new Date(Math.min(cursor.getTime() + (CHUNK_DAYS - 1) * 86400000, untilDate.getTime()));
+    chunks.push({ since: fmt(cursor), until: fmt(chunkEnd) });
+    cursor = new Date(chunkEnd.getTime() + 86400000);
+  }
+  return chunks;
 }
 
 // 抓某段期間(since ~ until)的廣告成效,邏輯跟原本前端版本一致:
@@ -777,7 +782,7 @@ export default {
         return jsonResponse(
           {
             ok: true,
-            version: "2026-07-30-highvolume-monthly-fix",
+            version: "2026-07-30-weekly-chunk-split",
             message:
               "代理 Worker 運作中。呼叫範例: /api/orders?since=...&until=... 或 /api/meta/insights?since=...&until=...",
           },
@@ -791,6 +796,3 @@ export default {
     }
   },
 };
-
-// 觸發重新部署用的空白註解 2026-07-30T17:27:05Z
-
