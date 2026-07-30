@@ -1,0 +1,10 @@
+name = "shopline-proxy"
+main = "src/index.js"
+compatibility_date = "2026-01-01"
+
+# 注意:接上GitHub部署後,以下這些「機密/環境變數」跟KV綁定不會自動從Dashboard帶過來,
+# 需要在Cloudflare Dashboard → Workers & Pages → shopline-proxy → 設定(Settings)裡重新確認/補上:
+#   Secrets(加密變數):SHOPLINE_TOKEN、SHOPLINE_USER_AGENT、META_TOKEN、PROXY_SECRET
+#   KV命名空間繫結(Bindings):REPORT_KV → 指向 report-kv 這個命名空間
+#     (id: d283e1d9fa8f4ec1b1a64f2818649cb0,跟speedingscs/H-J共用的同一個KV)
+# 這是接上Git部署後「一次性」要重新確認的設定,不是每次push都要重做。
