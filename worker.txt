@@ -422,32 +422,15 @@ async function fetchInsightsRowsForRange(state, token, accountId, since, until) 
   return rows;
 }
 
-// 把 since~until 這段日期範圍,切成一段一段大約7天(一週)的小區間——月報表(30天)大概會切成4~5段。
-// 只有在範圍夠大(超過 20 天,代表是月報表這種大範圍查詢)時才切;短範圍(週報表本身)維持單段查詢。
-// 之前的版本只切成對半(各約15天),對H&J一頁業績這種高流量帳號還是不夠小,同樣的錯誤(1/99)還是
-// 一樣發生;改成用「週報表證實可靠的天數」當作每一段的大小,理論上更不容易在 Meta 那邊逼近逾時。
+// 2026-07-30 二次修正:原本以為問題是「單次查詢範圍太大、太複雜、逼近逾時」,所以切成多段各自查詢。
+// 但後來確認這個Meta App目前是Dev Tier,額度上限是「每個廣告帳號每小時300次請求」——這是用
+// 「總呼叫次數」算的,不是用「每次請求的複雜度」算的。切成越多段,總呼叫次數反而越多,在這種
+// 按次數計算的硬上限下,方向是錯的:應該盡量減少總呼叫次數,不是減少單次複雜度。改回單一次查詢,
+// 讓 Meta 自己的分頁機制(paging.next)處理大資料量——分頁呼叫一樣算次數,但至少不會平白多出
+// 「切成8段、每段都要重新查一次貨幣/從頭來」這種額外開銷。這個函式保留,但目前固定回傳單一段,
+// 之後如果 Dev Tier 額度有調整,只要改這裡就能重新啟用切段邏輯,不用大動其他程式碼。
 function splitDateRangeIfLarge(since, until) {
-  const sinceParts = parseDateParts(since);
-  const untilParts = parseDateParts(until);
-  if (!sinceParts || !untilParts) return [{ since, until }];
-  const sinceDate = new Date(Date.UTC(sinceParts.y, sinceParts.m - 1, sinceParts.d));
-  const untilDate = new Date(Date.UTC(untilParts.y, untilParts.m - 1, untilParts.d));
-  const totalDays = Math.round((untilDate - sinceDate) / 86400000) + 1;
-  if (totalDays <= 20) return [{ since, until }];
-
-  const CHUNK_DAYS = 4;
-  const fmt = (d) => {
-    const pad = (n) => String(n).padStart(2, "0");
-    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
-  };
-  const chunks = [];
-  let cursor = sinceDate;
-  while (cursor <= untilDate) {
-    const chunkEnd = new Date(Math.min(cursor.getTime() + (CHUNK_DAYS - 1) * 86400000, untilDate.getTime()));
-    chunks.push({ since: fmt(cursor), until: fmt(chunkEnd) });
-    cursor = new Date(chunkEnd.getTime() + 86400000);
-  }
-  return chunks;
+  return [{ since, until }];
 }
 
 // 抓某段期間(since ~ until)的廣告成效,邏輯跟原本前端版本一致:
@@ -782,7 +765,7 @@ export default {
         return jsonResponse(
           {
             ok: true,
-            version: "2026-07-30-4day-chunk-split",
+            version: "2026-07-30-single-query-devtier-aware",
             message:
               "代理 Worker 運作中。呼叫範例: /api/orders?since=...&until=... 或 /api/meta/insights?since=...&until=...",
           },
