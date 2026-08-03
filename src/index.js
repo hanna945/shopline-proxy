@@ -841,17 +841,6 @@ export default {
       if (url.pathname === "/api/meta/insights" && request.method === "GET") {
         return await handleMetaInsights(url, env, origin);
       }
-      // 暫時除錯:直接看 Meta 對「貼文 created_time」查詢回什麼(診斷為什麼抓不到前台發佈時間)。
-      // 用法:/api/meta/debug-postpublish?ids=<story_id1>,<story_id2>
-      if (url.pathname === "/api/meta/debug-postpublish" && request.method === "GET") {
-        const ids = url.searchParams.get("ids");
-        if (!ids) return jsonResponse({ error: "need ids" }, 400, origin);
-        const encToken = encodeURIComponent(env.META_TOKEN || "");
-        const gu = `${META_GRAPH_BASE}/?ids=${encodeURIComponent(ids)}&fields=created_time,is_published,is_expired,promotable_id&access_token=${encToken}`;
-        const gr = await fetch(gu);
-        const gtxt = await gr.text();
-        return jsonResponse({ status: gr.status, raw: gtxt.slice(0, 1800) }, 200, origin);
-      }
       if (url.pathname === "/" || url.pathname === "") {
         return jsonResponse(
           {
