@@ -729,6 +729,74 @@ async function handleMetaInsights(url, env, origin) {
   }
 }
 
+// 圖片代理:讓「沒有 Facebook 權限的觀看者(例如品牌方)」也能看到 Meta 廣告縮圖。
+// 背景:Meta 回傳的縮圖是 *.fbcdn.net 的網址,而且常常是綁「當下登入 FB 那個 session」
+// 的 fan-network(.fna.)網址,只有登入 FB 且對這個廣告帳號有權限的人(管理員)瀏覽器載得出來,
+// 品牌方直接連 fbcdn 會被擋掉(403)。這裡改由 Worker 在伺服器端去抓圖、再回傳給前端,
+// 前端的 <img> 指向這個端點而不是直接指向 Facebook,任何人都看得到,不需要自己有 FB 權限。
+// 安全:只允許代理 *.fbcdn.net / *.facebook.com 的圖片,避免變成任意網址的開放代理(SSRF)。
+// 這個端點「不需要」X-Proxy-Auth——因為 <img src> 沒辦法帶自訂 header,而且只回圖片、
+// 又鎖死了只能抓 Facebook 圖床,風險很低。
+async function handleImageProxy(url, request, origin) {
+  const raw = url.searchParams.get("u");
+  if (!raw) return new Response("missing u", { status: 400, headers: corsHeaders(origin) });
+  let target;
+  try {
+    target = new URL(raw);
+  } catch {
+    return new Response("bad url", { status: 400, headers: corsHeaders(origin) });
+  }
+  const host = target.hostname.toLowerCase();
+  const allowed =
+    target.protocol === "https:" &&
+    (host === "fbcdn.net" || host.endsWith(".fbcdn.net") || host.endsWith(".facebook.com"));
+  if (!allowed) {
+    return new Response("host not allowed", { status: 403, headers: corsHeaders(origin) });
+  }
+
+  // 先看 Cloudflare 邊緣快取有沒有(用整個代理請求網址當 key,含 fbcdn 的簽章參數,
+  // 換一批新網址就自然是新的 key)。
+  const cache = caches.default;
+  const cacheKey = new Request(url.toString(), { method: "GET" });
+  const hit = await cache.match(cacheKey);
+  if (hit) return hit;
+
+  let upstream;
+  try {
+    upstream = await fetch(target.toString(), {
+      headers: {
+        "User-Agent": request.headers.get("User-Agent") || "Mozilla/5.0",
+        Accept: "image/avif,image/webp,image/*,*/*;q=0.8",
+        Referer: "https://www.facebook.com/",
+      },
+    });
+  } catch {
+    // 伺服器端抓不到(例如網址已過期):導回原網址,讓有 FB 權限的人至少還看得到,
+    // 沒權限的人前端會退回「素材」框,不比現況差。
+    return Response.redirect(target.toString(), 302);
+  }
+  if (!upstream.ok) {
+    return Response.redirect(target.toString(), 302);
+  }
+  const contentType = upstream.headers.get("Content-Type") || "image/jpeg";
+  const body = await upstream.arrayBuffer();
+  const resp = new Response(body, {
+    status: 200,
+    headers: {
+      "Content-Type": contentType,
+      // 縮圖內容不太會變,快取一天,減少對 fbcdn 的重複請求。
+      "Cache-Control": "public, max-age=86400",
+      "Access-Control-Allow-Origin": origin || "*",
+    },
+  });
+  try {
+    await cache.put(cacheKey, resp.clone());
+  } catch {
+    /* 快取寫入失敗不影響回應 */
+  }
+  return resp;
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -736,6 +804,12 @@ export default {
 
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: corsHeaders(origin) });
+    }
+
+    // 圖片代理:放在密碼驗證「之前」,因為 <img src> 沒辦法帶 X-Proxy-Auth header。
+    // 只代理 Facebook 圖床、只回圖片,公開存取沒關係。
+    if (url.pathname === "/api/img" && request.method === "GET") {
+      return await handleImageProxy(url, request, origin);
     }
 
     // 品牌清單只是名稱跟 ID,不是真正的營收資料,公開查看沒關係,所以放在密碼驗證「之前」處理。
@@ -765,7 +839,7 @@ export default {
         return jsonResponse(
           {
             ok: true,
-            version: "2026-07-30-single-query-devtier-aware",
+            version: "2026-08-03-image-proxy",
             message:
               "代理 Worker 運作中。呼叫範例: /api/orders?since=...&until=... 或 /api/meta/insights?since=...&until=...",
           },
