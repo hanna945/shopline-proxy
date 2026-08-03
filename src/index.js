@@ -554,11 +554,13 @@ async function fetchInsightsForRange(state, token, accountId, since, until, rela
   // 貼文數量一多(代表廣告數量也多,很可能是月報表這種大範圍查詢),直接整段跳過不查,
   // 用「投放時間」排序來對付這種情境;貼文數量少(通常是週報表)才嘗試查,而且預算也縮短到3秒。
   const uniquePostIds = [...new Set(Object.values(postIdMap))];
-  const MAX_POSTS_TO_CHECK = 40; // 超過這個數字,大概率是月報表等大範圍查詢,直接跳過不冒風險
+  // 2026-08-03:報表要能依「貼文前台發佈時間」排序,每月報表也需要這個欄位,所以不再因為貼文數多就整段跳過。
+  // 批次查詢每次最多 50 篇(很快),仍保留一個較寬的時間預算當保護,避免極端數量把整包請求推過執行時間上限;
+  // 預算用完時,剩下沒查到的廣告在前端會被視為「後台直接發佈」排在最前面。
   let postPublishMap = {}; // story_id -> created_time
-  if (uniquePostIds.length > 0 && uniquePostIds.length <= MAX_POSTS_TO_CHECK) {
+  if (uniquePostIds.length > 0) {
     const postPublishBudgetStart = Date.now();
-    const POST_PUBLISH_TIME_BUDGET_MS = 3000;
+    const POST_PUBLISH_TIME_BUDGET_MS = 10000;
     for (let i = 0; i < uniquePostIds.length; i += ID_CHUNK_SIZE) {
       if (Date.now() - postPublishBudgetStart > POST_PUBLISH_TIME_BUDGET_MS) break; // 時間預算用完,查到多少算多少
       const chunk = uniquePostIds.slice(i, i + ID_CHUNK_SIZE);
@@ -839,7 +841,7 @@ export default {
         return jsonResponse(
           {
             ok: true,
-            version: "2026-08-03-image-proxy",
+            version: "2026-08-03-image-proxy-postpublish",
             message:
               "代理 Worker 運作中。呼叫範例: /api/orders?since=...&until=... 或 /api/meta/insights?since=...&until=...",
           },
