@@ -554,13 +554,17 @@ async function fetchInsightsForRange(state, token, accountId, since, until, rela
   // 貼文數量一多(代表廣告數量也多,很可能是月報表這種大範圍查詢),直接整段跳過不查,
   // 用「投放時間」排序來對付這種情境;貼文數量少(通常是週報表)才嘗試查,而且預算也縮短到3秒。
   const uniquePostIds = [...new Set(Object.values(postIdMap))];
-  // 2026-08-03:報表要能依「貼文前台發佈時間」排序,每月報表也需要這個欄位,所以不再因為貼文數多就整段跳過。
-  // 批次查詢每次最多 50 篇(很快),仍保留一個較寬的時間預算當保護,避免極端數量把整包請求推過執行時間上限;
-  // 預算用完時,剩下沒查到的廣告在前端會被視為「後台直接發佈」排在最前面。
+  // 2026-08-03:報表要能依「貼文前台發佈時間」排序,所以每月報表也盡量抓這個欄位(原本只抓 ≤40 篇的週報表)。
+  // 但實測高流量帳號(例如 H&J 一頁業績,單月 60+ 支廣告)的月查詢本來就逼近 30 秒上限,再加上這段抓取會
+  // 直接逾時 500——而且那種帳號的廣告多半是「後台直接發佈(dark post)」,本來就查不到前台發佈時間。
+  // 所以設一個上限跳過這種超大又抓不到資料的月查詢(前端會把它們當成「後台直接發佈」排最前面),
+  // 保護月查詢不逾時;一般大小的月/週照常抓取。上限拉到 55(比原本 40 高、覆蓋更多一般月份),
+  // 並收緊時間預算到 5 秒(批次每次 50 篇很快,正常月份幾次就抓完)。
+  const MAX_POSTS_TO_CHECK = 55;
   let postPublishMap = {}; // story_id -> created_time
-  if (uniquePostIds.length > 0) {
+  if (uniquePostIds.length > 0 && uniquePostIds.length <= MAX_POSTS_TO_CHECK) {
     const postPublishBudgetStart = Date.now();
-    const POST_PUBLISH_TIME_BUDGET_MS = 10000;
+    const POST_PUBLISH_TIME_BUDGET_MS = 5000;
     for (let i = 0; i < uniquePostIds.length; i += ID_CHUNK_SIZE) {
       if (Date.now() - postPublishBudgetStart > POST_PUBLISH_TIME_BUDGET_MS) break; // 時間預算用完,查到多少算多少
       const chunk = uniquePostIds.slice(i, i + ID_CHUNK_SIZE);
@@ -841,7 +845,7 @@ export default {
         return jsonResponse(
           {
             ok: true,
-            version: "2026-08-03-image-proxy-postpublish",
+            version: "2026-08-03-image-proxy-postpublish-capped55",
             message:
               "代理 Worker 運作中。呼叫範例: /api/orders?since=...&until=... 或 /api/meta/insights?since=...&until=...",
           },
